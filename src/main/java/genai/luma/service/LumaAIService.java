@@ -1,5 +1,8 @@
 package genai.luma.service;
 
+import genai.luma.entity.ExternalMediaGeneration;
+import genai.luma.repository.ExternalMediaGenerationRepository;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -8,6 +11,7 @@ import org.springframework.http.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.List;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -24,106 +28,159 @@ public class LumaAIService {
     private String baseUrl;
 
     private final RestTemplate restTemplate;
+    private final ExternalMediaGenerationRepository repository;
 
-    public LumaAIService(RestTemplate restTemplate) {
+    public LumaAIService(RestTemplate restTemplate, ExternalMediaGenerationRepository repository) {
         this.restTemplate = restTemplate;
+        this.repository = repository;
     }
 
-    public byte[] generateVideo(String prompt, String model, String resolution, String duration) {
-        try {
+    public String generateVideo(String prompt, String model, String resolution, String duration) {
+        String generationId = requestGeneration(prompt, model, resolution, duration, "video");
 
-            // Step 1: Request to generate a video and get the generation ID
-            String generationId = requestGeneration(prompt, model, resolution, duration, "video");
-            System.out.println("Generation ID: " + generationId);
-        
-            // Step 2: Poll the API to check the status
-            Boolean completed = false;
-            String videoUrl = null;
-        
-            while (!completed) {
+        // Persist the request details into the database
+        ExternalMediaGeneration media = new ExternalMediaGeneration();
+        media.setGenerationId(generationId);
+        media.setType("video");
+        media.setStatus("N"); // Not completed
+        repository.save(media);
+
+        return generationId;
+    }
+
+    public String generateImage(String prompt) {
+        String generationId = requestGeneration(prompt, "", "", "", "image");
+
+        // Persist the request details into the database
+        ExternalMediaGeneration media = new ExternalMediaGeneration();
+        media.setGenerationId(generationId);
+        media.setType("image");
+        media.setStatus("N"); // Not completed
+        repository.save(media);
+
+        return generationId;
+    }
+
+    @Scheduled(initialDelay = 5000, fixedDelay = 5000) // Runs every 1 minute
+    public void processPendingGenerations() {
+        List<ExternalMediaGeneration> pendingGenerations = repository.findByStatus("N");
+
+        for (ExternalMediaGeneration media : pendingGenerations) {
+            try {
                 // Check the status of the generation
-                Map<String, Object> statusResponse = checkGenerationStatus(generationId, "video");
+                Map<String, Object> statusResponse = checkGenerationStatus(media.getGenerationId(), media.getType());
                 String status = (String) statusResponse.get("status");
-                System.out.println("Status: " + status);
-        
-                if ("completed".equals(status)) {
-                    completed = true;
-                    videoUrl = (String) statusResponse.get("url");
-                    System.out.println("Generated URL: " + videoUrl);
-                } else if ("failed".equals(status)) {
-                    throw new RuntimeException("Video generation failed.");
-                } else {
-                    // Wait for 3 seconds before polling again
-                    try {
-                        Thread.sleep(3000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("Thread interrupted while waiting for video generation.", e);
-                    }
-                }
-            }
 
-            // Step 3: Download the video as a byte array
-            byte[] videoContent = download(videoUrl);
+                if ("completed".equals(status)) {
+                    String contentUrl = (String) statusResponse.get("url");
+                    byte[] content = download(contentUrl);
+
+                    // Update the entity with the completed status and content
+                    media.setContent(content);
+                    media.setStatus("Y"); // Mark as completed
+                    repository.save(media);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to process generation ID " + media.getGenerationId() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    // public byte[] generateVideo(String prompt, String model, String resolution, String duration) {
+    //     try {
+
+    //         // Step 1: Request to generate a video and get the generation ID
+    //         String generationId = requestGeneration(prompt, model, resolution, duration, "video");
+    //         System.out.println("Generation ID: " + generationId);
         
-            String fileName = generateUniqueFileName("video");
+    //         // Step 2: Poll the API to check the status
+    //         Boolean completed = false;
+    //         String videoUrl = null;
+        
+    //         while (!completed) {
+    //             // Check the status of the generation
+    //             Map<String, Object> statusResponse = checkGenerationStatus(generationId, "video");
+    //             String status = (String) statusResponse.get("status");
+    //             System.out.println("Status: " + status);
+        
+    //             if ("completed".equals(status)) {
+    //                 completed = true;
+    //                 videoUrl = (String) statusResponse.get("url");
+    //                 System.out.println("Generated URL: " + videoUrl);
+    //             } else if ("failed".equals(status)) {
+    //                 throw new RuntimeException("Video generation failed.");
+    //             } else {
+    //                 // Wait for 3 seconds before polling again
+    //                 try {
+    //                     Thread.sleep(3000);
+    //                 } catch (InterruptedException e) {
+    //                     Thread.currentThread().interrupt();
+    //                     throw new RuntimeException("Thread interrupted while waiting for video generation.", e);
+    //                 }
+    //             }
+    //         }
+
+    //         // Step 3: Download the video as a byte array
+    //         byte[] videoContent = download(videoUrl);
+        
+    //         String fileName = generateUniqueFileName("video");
     
-            // Step 4: Save the video locally
-            saveLocally(videoContent, fileName);
+    //         // Step 4: Save the video locally
+    //         saveLocally(videoContent, fileName);
         
-            // Step 5: Return the byte array
-            return videoContent;
-        } catch (Exception e) {
-            throw new RuntimeException("Error while calling Luma AI API: " + e.getMessage(), e);
-        }
-    }
+    //         // Step 5: Return the byte array
+    //         return videoContent;
+    //     } catch (Exception e) {
+    //         throw new RuntimeException("Error while calling Luma AI API: " + e.getMessage(), e);
+    //     }
+    // }
 
-    public byte[] generateImage(String prompt) {
-        try{
-            // Step 1: Request to generate an image and get the generation ID
-            String generationId = requestGeneration(prompt, "", "", "", "image");
-            System.out.println("Generation ID: " + generationId);
+    // public byte[] generateImage(String prompt) {
+    //     try{
+    //         // Step 1: Request to generate an image and get the generation ID
+    //         String generationId = requestGeneration(prompt, "", "", "", "image");
+    //         System.out.println("Generation ID: " + generationId);
 
-            // Step 2: Poll the API to check the status
-            Boolean completed = false;
-            String imageUrl = null;
+    //         // Step 2: Poll the API to check the status
+    //         Boolean completed = false;
+    //         String imageUrl = null;
         
-            while (!completed) {
-                // Check the status of the generation
-                Map<String, Object> statusResponse = checkGenerationStatus(generationId, "image");
-                String status = (String) statusResponse.get("status");
-                System.out.println("Status: " + status);
+    //         while (!completed) {
+    //             // Check the status of the generation
+    //             Map<String, Object> statusResponse = checkGenerationStatus(generationId, "image");
+    //             String status = (String) statusResponse.get("status");
+    //             System.out.println("Status: " + status);
         
-                if ("completed".equals(status)) {
-                    completed = true;
-                    imageUrl = (String) statusResponse.get("url");
-                    System.out.println("Generated URL: " + imageUrl);
-                } else if ("failed".equals(status)) {
-                    throw new RuntimeException("Image generation failed.");
-                } else {
-                    // Wait for 3 seconds before polling again
-                    try {
-                        Thread.sleep(3000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("Thread interrupted while waiting for image generation.", e);
-                    }
-                }
-            }
+    //             if ("completed".equals(status)) {
+    //                 completed = true;
+    //                 imageUrl = (String) statusResponse.get("url");
+    //                 System.out.println("Generated URL: " + imageUrl);
+    //             } else if ("failed".equals(status)) {
+    //                 throw new RuntimeException("Image generation failed.");
+    //             } else {
+    //                 // Wait for 3 seconds before polling again
+    //                 try {
+    //                     Thread.sleep(3000);
+    //                 } catch (InterruptedException e) {
+    //                     Thread.currentThread().interrupt();
+    //                     throw new RuntimeException("Thread interrupted while waiting for image generation.", e);
+    //                 }
+    //             }
+    //         }
         
-            // Step 3: Download the image as a byte array
-            byte[] imageContent = download(imageUrl);
-            String fileName = generateUniqueFileName("image");
+    //         // Step 3: Download the image as a byte array
+    //         byte[] imageContent = download(imageUrl);
+    //         String fileName = generateUniqueFileName("image");
         
-            // Step 4: Save the image locally
-            saveLocally(imageContent, fileName);
+    //         // Step 4: Save the image locally
+    //         saveLocally(imageContent, fileName);
         
-            // Step 5: Return the byte array
-            return imageContent;
-        } catch (Exception e) {
-            throw new RuntimeException("Error while calling Luma AI API: " + e.getMessage(), e);
-        }
-    }
+    //         // Step 5: Return the byte array
+    //         return imageContent;
+    //     } catch (Exception e) {
+    //         throw new RuntimeException("Error while calling Luma AI API: " + e.getMessage(), e);
+    //     }
+    // }
 
     public String requestGeneration(String prompt, String model, String resolution, String duration, String type) {
         // Validate the type (video or image)
@@ -229,7 +286,7 @@ public class LumaAIService {
         }
     }
 
-    private byte[] download(String videoUrl) {
+    public byte[] download(String videoUrl) {
         // Make a GET request to download the video
         ResponseEntity<byte[]> response = restTemplate.exchange(videoUrl, HttpMethod.GET, null, byte[].class);
         return response.getBody();
