@@ -15,16 +15,15 @@ public class ExternalMediaGeneration {
     private String generationId;
 
     @Column(name = "type", nullable = false)
-    private String type; // "video" or "image"
+    private String type; 
 
     @Column(name = "status", nullable = false)
-    private String status; // "Y" for completed, "N" for not completed
+    private String status; 
 
     @Lob
     @Column(name = "content")
-    private byte[] content; // Content as byte array
+    private byte[] content; 
 
-    // Getters and Setters
     public Long getId() {
         return id;
     }
