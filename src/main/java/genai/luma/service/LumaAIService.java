@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class LumaAIService {
@@ -61,23 +62,33 @@ public class LumaAIService {
         return generationId;
     }
 
-    @Scheduled(initialDelay = 5000, fixedDelay = 5000) // Runs every 1 minute
+    @Scheduled(initialDelay = 10, fixedDelay = 10, timeUnit = TimeUnit.SECONDS) 
     public void processPendingGenerations() {
+        System.out.println("Processing");
+
         List<ExternalMediaGeneration> pendingGenerations = repository.findByStatus("N");
+        System.out.println("Pending Generations: " + pendingGenerations.size());
 
         for (ExternalMediaGeneration media : pendingGenerations) {
             try {
+                System.out.println("Checking: " + media.toString());
                 // Check the status of the generation
                 Map<String, Object> statusResponse = checkGenerationStatus(media.getGenerationId(), media.getType());
                 String status = (String) statusResponse.get("status");
+                System.out.println("status: " + status);
 
                 if ("completed".equals(status)) {
                     String contentUrl = (String) statusResponse.get("url");
+                    System.out.println("Completed for " + media.getGenerationId() + " , URL: " + contentUrl);
                     byte[] content = download(contentUrl);
 
                     // Update the entity with the completed status and content
                     media.setContent(content);
                     media.setStatus("Y"); // Mark as completed
+                    String fileName = generateUniqueFileName(media.getType());
+    
+                    // Save the video locally
+                    saveLocally(content, fileName);
                     repository.save(media);
                 }
             } catch (Exception e) {
@@ -278,6 +289,9 @@ public class LumaAIService {
                 String contentUrl = type.equalsIgnoreCase("video") ? (String) assets.get("video") : (String) assets.get("image");
                 result.put("url", contentUrl);
             } else {
+                if ("failed".equals(state)) {
+                    System.out.println("** Reason: "+ responseBody.get("failure_reason"));
+                }
                 result.put("url", null);
             }
             return result;
